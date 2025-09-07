@@ -1,0 +1,128 @@
+import torch
+import os
+from torch.utils.data import DataLoader
+from torch.optim import RMSprop
+from torchvision import datasets
+from model import CNN, train_model, test_model
+from util import header, plot_distribution, double_plot, normalization_transform 
+
+# Model will be trained in 2 sessions with 3 epochs each
+# Each epochs will have a batch size of 64
+SESSION_1_EPOCH_COUNT = 3
+SESSION_2_EPOCH_COUNT = 3
+LEARNING_RATE = 0.001
+BATCH_SIZE = 64
+TEST_BATCH_SIZE = 1000
+
+
+#
+def det_device_config(train_kwargs, test_kwargs):
+  use_cuda = torch.cuda.is_available()
+  use_mps = torch.backends.mps.is_available()
+  if use_cuda:
+    print('using cuda device')
+    device = torch.device("cuda")
+  elif use_mps:
+    print('using mps')
+    device = torch.device("mps")
+  else:
+    print("using cpu")
+    device = torch.device("cpu")
+  if use_cuda:
+    cuda_kwargs = {'num_workers': 1, 'pin_memory': True, 'shuffle': True}
+    train_kwargs.update(cuda_kwargs)
+    test_kwargs.update(cuda_kwargs)
+  return device, train_kwargs, test_kwargs
+
+if __name__ := '__main__':
+
+  # setting keyword arguments for training and testing the model in Pytorch
+  train_kwargs = {'batch_size': BATCH_SIZE}
+  test_kwargs = {'batch_size': TEST_BATCH_SIZE}
+  device, train_kwargs, test_kwargs = det_device_config(train_kwargs, test_kwargs)
+ 
+  # Check if there exists a pre-trained model
+  if os.path.exists(".venv/lib/model.pt"):
+    print("\nPre-trained model found")
+    print("Initilize with pre-trained model")
+
+    # Load dataset from torchvision
+    header("Loading datasets...")
+    test_data = datasets.MNIST('../data', train=False, transform=normalization_transform)
+    print("Done loading datasets")
+
+    # Visualize dataset distribution
+    plot_distribution("Distribution of Labels in Testing Set", test_data)
+
+    # Load the model checkpoint
+    header("Loading the pre-trained model...")
+    checkpoint_path = ".venv/lib/model.pt"
+    model = CNN().to(device)
+    model.load_state_dict(torch.load(checkpoint_path))
+    model.eval()
+    print(f"Loaded model from {checkpoint_path}")
+
+    # Test model accuracy
+    print("Checking model accuracy...")
+    test_accuracy = test_model(model, DataLoader(test_data, **test_kwargs), device)
+    print(f"Model Accuracy: {test_accuracy:.2%}")
+    print("Done")
+
+  # No pre-trained model found
+  else:
+    model = CNN().to(device)
+    print("\nNo pre-trained model")
+    print("Begin training model process")
+
+    # Load datasets from torchvision
+    header("Loading datasets...")
+    train_data = datasets.MNIST('../data', train=True, download = True, transform = normalization_transform)
+    test_data = datasets.MNIST('../data', train=False, transform = normalization_transform)
+    print("Done loading datasets")
+
+    # Visualize datasets distribution
+    plot_distribution("Distribution of Labels in Training Set", train_data)
+    plot_distribution("Distribution of Labels in Testing Set", test_data)
+
+    # First session og training the model
+    header("Training the model...")
+    optimizer = RMSprop(model.parameters(), lr = LEARNING_RATE)
+    train_loss, train_acc = train_model(model, device, data_loader=DataLoader(train_data, **train_kwargs), loss_func = torch.nn.CrossEntropyLoss(), optimizer = optimizer, num_epochs = SESSION_1_EPOCH_COUNT)
+    print("Done training")
+
+    # Saving the checkpoint
+    header("Saving checkpoint 1...")
+    checkpoint_1_path = ".venv/lib/checkpoint1.pt"
+    torch.save({'model_state_dict': model.state_dict(), 'optimizer_state_dict': optimizer.state_dict()}, checkpoint_1_path)
+    print("Saved")
+
+    # Loading the checkpoint
+    header("Loading checkpoint 1...")
+    checkpoint = torch.load(checkpoint_1_path)
+    new_model = CNN().to(device)
+    new_model. load_state_dict(checkpoint['model_state_dict'])
+    new_optimizer = RMSprop(new_model.parameters(), lr = LEARNING_RATE)
+    new_optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    print("Loaded")
+
+    # Checking accuracy of model after first training session
+    print("Checking Accuracy...")
+    old_test_accuracy = test_model(model, DataLoader(test_data, **test_kwargs), device)
+    new_test_accuracy = test_model(new_model, DataLoader(test_data, **test_kwargs), device)
+    print("Loaded Accuracy:" , new_test_accuracy)
+    print("Expected Accuracy:", old_test_accuracy)
+    print("Done")
+
+    # Second session of training the model
+    header("Training the model...")
+    train_loss_2, train_acc_2 = train_model(new_model, device, data_loader=DataLoader(train_data, **train_kwargs), loss_func = torch.nn.CrossEntropyLoss(), optimizer = new_optimizer, num_epochs = SESSION_2_EPOCH_COUNT)
+    print("Done training")
+    train_loss.extend(train_loss_2)
+    train_acc.extend(train_acc_2)
+    
+    # Finish training and saving the model
+    header("Saving the model to file...")
+    MODEL_PATH = ".venv/lib/model.pt"
+    torch.save(new_model.state_dict(), MODEL_PATH)
+    print(f"Saved model to {MODEL_PATH}")
+    double_plot(label1="Training Loss", data1=train_loss, label2="Training Accuracy", data2=train_acc)
